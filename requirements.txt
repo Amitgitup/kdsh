@@ -1,0 +1,9 @@
+numpy
+pandas
+scikit-learn
+pathway
+python-dotenv
+numpy 
+faiss-cpu
+sentence-transformers
+google-genai
