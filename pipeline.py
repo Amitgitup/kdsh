@@ -32,7 +32,7 @@ class NarrativeConsistencyPipeline:
         claim: str,
         story_id: str,
         character_name: str = None,
-        top_k: int = 8,
+        top_k: int = 12,
     ) -> Dict:
         """
         Runs full pipeline for a single claim.
