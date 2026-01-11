@@ -1,57 +1,77 @@
 from typing import List, Dict
 
 
+def normalize_story_id(s: str) -> str:
+    return s.strip().lower().replace(" ", "_")
+
+
 def retrieve_evidence(
     claim: str,
     story_id: str,
     vector_index,
     character_name: str = None,
     top_k: int = 10,
-    min_similarity: float = 0.05,
+    min_similarity: float = 0.03,
 ) -> List[Dict]:
     """
-    Dual-query retrieval:
-    1) claim
-    2) character_name + claim (if provided)
+    Robust dual-query retrieval with fallback.
     """
 
     if not claim or not claim.strip():
         return []
 
+    story_id_norm = normalize_story_id(story_id)
+
     queries = [claim]
-    if character_name:
+    if character_name and character_name.strip():
         queries.append(f"{character_name} {claim}")
 
     all_results = []
 
+    # -------------------------------
+    # Stage 1: strict (story filter)
+    # -------------------------------
     for q in queries:
         results = vector_index.query(
             query_text=q,
-            story_id=story_id,
-            top_k=top_k * 2,
+            story_id=story_id_norm,
+            top_k=top_k * 3,
             return_scores=True,
         )
         all_results.extend(results)
 
-    # Deduplicate by chunk_id, keep best score
-    merged = {}
+    # -------------------------------
+    # Stage 2: fallback (no story filter)
+    # -------------------------------
+    if not all_results:
+        for q in queries:
+            results = vector_index.query(
+                query_text=q,
+                story_id=None,  # <-- fallback
+                top_k=top_k * 3,
+                return_scores=True,
+            )
+            all_results.extend(results)
 
+    if not all_results:
+        return []
+
+    # -------------------------------
+    # Deduplicate by chunk_id
+    # -------------------------------
+    merged = {}
     for r in all_results:
         cid = r["chunk_id"]
         score = float(r.get("score", 0.0))
-
-        # Always store score explicitly
-        r_with_score = dict(r)
-        r_with_score["score"] = score
+        r = dict(r)
+        r["score"] = score
 
         if cid not in merged or score > merged[cid]["score"]:
-            merged[cid] = r_with_score
+            merged[cid] = r
 
-
-    # Filter + sort
     final = [
         v for v in merged.values()
-        if v.get("score", 0.0) >= min_similarity
+        if v["score"] >= min_similarity
     ]
     final.sort(key=lambda x: x["score"], reverse=True)
 
@@ -63,43 +83,25 @@ if __name__ == "__main__":
     from indexing.chunking import chunk_all_novels
     from indexing.local_vector_index import LocalVectorIndex
 
-
     novels = load_novels("data/novels")
     chunks = chunk_all_novels(novels)
 
-    # Build vector index
     index = LocalVectorIndex()
     index.index_chunks(chunks)
-
 
     claim = (
         "Thalcave's people faded as colonists advanced; his father was the last "
         "of the tribal guides and knew the pampas geography and animal ways."
     )
 
-    story_id = "in_search_of_the_castaways"
-    character_name = "Thalcave"
-
     evidence = retrieve_evidence(
         claim=claim,
-        story_id=story_id,
+        story_id="In Search of the Castaways",
         vector_index=index,
-        character_name=character_name,
+        character_name="Thalcave",
         top_k=8,
     )
 
-
-    print("\n=== RETRIEVAL TEST OUTPUT ===")
-    print(f"Claim: {claim}")
-    print(f"Story ID: {story_id}")
-    print(f"Character: {character_name}")
-    print(f"Retrieved chunks: {len(evidence)}\n")
-
-    for i, e in enumerate(evidence, 1):
-        print(f"{'-'*80}")
-        print(f"Evidence #{i}")
-        print(f"Chunk ID   : {e['chunk_id']}")
-        print(f"Position   : {round(e['position'], 3)}")
-        print(f"Similarity : {round(e.get('score', 0.0), 4)}")
-        print("Text preview:")
-        print(e["text"][:400].strip(), "...")
+    print(f"Retrieved {len(evidence)} chunks")
+    for e in evidence:
+        print(round(e["score"], 4), e["text"][:200])
